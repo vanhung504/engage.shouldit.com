@@ -1,0 +1,8 @@
+{
+  "crons": [
+    { "path": "/api/cron-jobs/send-sequences", "schedule": "0 * * * *" },
+    { "path": "/api/cron-jobs/reengagement",   "schedule": "0 9 * * *" },
+    { "path": "/api/cron-jobs/sync-resend",    "schedule": "0 2 * * *" },
+    { "path": "/api/cron-jobs/price-check",   "schedule": "0 10 * * *" }
+  ]
+}

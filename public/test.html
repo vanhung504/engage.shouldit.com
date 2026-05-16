@@ -1,0 +1,35 @@
+<!-- test.html — mở bằng browser trực tiếp -->
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>Best Blenders 2026</h1>
+
+  <!-- Inline banner -->
+  <div data-si-inline="after-pick1"></div>
+
+  <!-- Fake scoreboard -->
+  <div data-si-gate="scoreboard">
+    <p>NutriBullet: 9.1</p>
+    <p>Vitamix: 8.7</p>
+  </div>
+
+  <div data-si-inline="end-of-article"></div>
+
+  <!-- Affiliate link -->
+  <a href="#" data-si-track="affiliate" data-si-product="nutribullet-znbf30500z">
+    Buy on Amazon
+  </a>
+
+  <script>
+    window.ShouldItEmail = {
+      apiUrl: 'http://localhost:3002/api',
+      category: 'blenders',
+      intent: 'buying',
+      productSlug: 'nutribullet-znbf30500z',
+      productName: 'NutriBullet Full-Size',
+      entryPoint: 'best_page_after_pick1'
+    }
+  </script>
+  <script src="./widget.js"></script>
+</body>
+</html>
