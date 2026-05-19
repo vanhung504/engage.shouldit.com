@@ -19,15 +19,16 @@ export const enrollmentStatusEnum = pgEnum('enrollment_status',
 
 export const pageTypeEnum = pgEnum('page_type', ['review', 'best'])
 
-// Điều kiện để quyết định có gửi một email step hay không.
-// Checked tại send time dựa trên tags của subscriber.
+// Gate condition evaluated at send time against subscriber attributes.
+// If the condition fails, the step is skipped.
 export const conditionKeyEnum = pgEnum('condition_key', [
-  'not_pro',            // chỉ gửi nếu chưa upgrade Pro
-  'has_clicked_amazon', // chỉ gửi nếu đã click affiliate link (likely đã mua)
-  'has_use_case_tag',   // chỉ gửi nếu có tag use_case (đã làm quiz)
-  'price_status_good',  // chỉ gửi khi giá đang ở mức tốt
-  'price_status_fair',  // chỉ gửi khi giá ở mức trung bình
-  'price_status_high',  // chỉ gửi khi giá cao
+  'not_pro',               // send only if subscriber has not upgraded to Pro
+  'has_clicked_amazon',    // send only if subscriber has clicked an affiliate link
+  'has_use_case_tag',      // send only if subscriber has completed the use-case quiz
+  'price_status_all_time_low', // send only when price is at or near historical low (≤ low * 1.03)
+  'price_status_good',         // send only when price is good
+  'price_status_fair',         // send only when price is fair
+  'price_status_high',         // send only when price is high
 ])
 
 // ─── Subscribers ──────────────────────────────────────────────────────────────
@@ -38,23 +39,10 @@ export const subscribers = pgTable('subscribers', {
   email:           text('email').notNull().unique(),
   status:          subscriberStatusEnum('status').default('ACTIVE').notNull(),
   resendContactId: text('resend_contact_id').unique(),
+  meta:            jsonb('meta').$type<{ member_tier?: string; engagement?: 'active' }>().notNull().default({}),
   createdAt:       timestamp('created_at').defaultNow().notNull(),
   updatedAt:       timestamp('updated_at').defaultNow().notNull(),
 })
-
-// Key-value profile của subscriber. Lưu mọi thông tin về họ: sản phẩm đang xem,
-// category, member tier, use case, price status, v.v.
-// Dùng bởi resolveVariables() để điền template và checkCondition() để lọc gửi.
-export const subscriberAttributes = pgTable('subscriber_attributes', {
-  id:           text('id').primaryKey().$defaultFn(() => createId()),
-  subscriberId: text('subscriber_id').notNull().references(() => subscribers.id),
-  key:          text('key').notNull(),
-  value:        text('value').notNull(),
-  createdAt:    timestamp('created_at').defaultNow().notNull(),
-}, (t) => [
-  unique().on(t.subscriberId, t.key, t.value),
-  index('sub_attrs_key_value_idx').on(t.key, t.value),
-])
 
 // Audit log mọi hành động của subscriber theo thời gian.
 // Khác tags (snapshot hiện tại), events là lịch sử đầy đủ — dùng cho analytics,
@@ -63,11 +51,12 @@ export const subscriberAttributes = pgTable('subscriber_attributes', {
 //   "đã schedule day-21 checkin chưa?" (enrollIfNotEnrolled crosssell_survey).
 //   Anonymous click (chưa opt-in) không track — chấp nhận được vì không có subscriberId.
 export const events = pgTable('events', {
-  id:           text('id').primaryKey().$defaultFn(() => createId()),
-  subscriberId: text('subscriber_id').notNull().references(() => subscribers.id),
-  type:         eventTypeEnum('type').notNull(),
-  metadata:     text('metadata'), // JSON string, tùy event type
-  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  id:            text('id').primaryKey().$defaultFn(() => createId()),
+  subscriberId:  text('subscriber_id').notNull().references(() => subscribers.id),
+  type:          eventTypeEnum('type').notNull(),
+  metadata:      text('metadata'), // JSON string, tùy event type
+  resendEmailId: text('resend_email_id'), // links EMAIL_OPENED/EMAIL_CLICKED back to send logs
+  createdAt:     timestamp('created_at').defaultNow().notNull(),
 }, (t) => [
   index('events_sub_type_idx').on(t.subscriberId, t.type),
   index('events_type_time_idx').on(t.type, t.createdAt),
@@ -82,6 +71,8 @@ export const sequenceEnrollments = pgTable('sequence_enrollments', {
   id:           text('id').primaryKey().$defaultFn(() => createId()),
   subscriberId: text('subscriber_id').notNull().references(() => subscribers.id),
   sequenceId:   text('sequence_id').notNull(),
+  productId:    text('product_id'),
+  meta:         jsonb('meta').$type<Record<string, string>>().notNull().default({}),
   step:         integer('step').default(0).notNull(),
   status:       enrollmentStatusEnum('status').default('ACTIVE').notNull(),
   enrolledAt:   timestamp('enrolled_at').defaultNow().notNull(),
@@ -195,7 +186,9 @@ export const alertSubscriptions = pgTable('alert_subscriptions', {
   subscriberId: text('subscriber_id').notNull().references(() => subscribers.id),
   categoryId:   text('category_id').notNull().references(() => categories.id),
   productId:    text('product_id').notNull(),
-  expiresAt:    timestamp('expires_at').notNull(),
+  intent:               text('intent'),
+  priceAtSubscription:  numeric('price_at_subscription'),
+  expiresAt:            timestamp('expires_at').notNull(),
   active:       boolean('active').default(true).notNull(),
   createdAt:    timestamp('created_at').defaultNow().notNull(),
 }, (t) => [
@@ -218,10 +211,30 @@ export const alertSendLog = pgTable('alert_send_log', {
   index('alert_log_subscriber_product_idx').on(t.subscriberId, t.productId),
 ])
 
+// ─── Products ─────────────────────────────────────────────────────────────────
+
+// Static product config managed via admin.
+// meta stores editorial variables (product_name, score, sale_months, value_statement, etc.)
+// Price stats (current_price, price_status, etc.) come from the external product API at send time.
+// meta values can be a plain string or a per-price-status map { good: '...', fair: '...', high: '...' }
+export type ProductMetaValue = string | Record<string, string>
+export type ProductMetaEntry = { key: string; value: ProductMetaValue }
+
+export const products = pgTable('products', {
+  id:         text('id').primaryKey().$defaultFn(() => createId()),
+  productId:  text('product_id').notNull().unique(),
+  categoryId: text('category_id').notNull().references(() => categories.id),
+  name:       text('name').notNull(),
+  meta:       jsonb('meta').$type<ProductMetaEntry[]>().notNull().default([]),
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
+  updatedAt:  timestamp('updated_at').defaultNow().notNull(),
+}, (t) => [
+  index('products_category_idx').on(t.categoryId),
+])
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Subscriber         = typeof subscribers.$inferSelect
-export type SubscriberAttribute = typeof subscriberAttributes.$inferSelect
 export type Event              = typeof events.$inferSelect
 export type SequenceEnrollment = typeof sequenceEnrollments.$inferSelect
 export type SequenceStep       = typeof sequenceSteps.$inferSelect
@@ -230,5 +243,6 @@ export type Category           = typeof categories.$inferSelect
 export type PagePlacement      = typeof pagePlacements.$inferSelect
 export type OptInConfig        = typeof optInConfigs.$inferSelect
 export type AlertTemplate      = typeof alertTemplates.$inferSelect
+export type Product            = typeof products.$inferSelect
 export type AlertSubscription  = typeof alertSubscriptions.$inferSelect
 export type AlertSendLog       = typeof alertSendLog.$inferSelect

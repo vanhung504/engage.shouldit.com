@@ -69,6 +69,15 @@ export default async function AdminLayout({
             </svg>
             Placements
           </a>
+          <a
+            href="/admin/products"
+            className="flex items-center gap-2.5 px-3 py-2 rounded-md text-gray-300 hover:text-white hover:bg-gray-800 transition-colors no-underline"
+          >
+            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M20 7H4a2 2 0 00-2 2v6a2 2 0 002 2h16a2 2 0 002-2V9a2 2 0 00-2-2zM12 12a2 2 0 100-4 2 2 0 000 4z" />
+            </svg>
+            Products
+          </a>
         </nav>
 
         {/* Sign out */}

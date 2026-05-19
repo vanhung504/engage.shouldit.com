@@ -5,10 +5,11 @@ import type { SequenceEnrollment } from '@/db/schema'
 export async function enrollIfNotEnrolled(
   subscriberId: string,
   sequenceId: string,
+  productId?: string | null,
 ): Promise<void> {
   await db
     .insert(sequenceEnrollments)
-    .values({ subscriberId, sequenceId, nextSendAt: new Date() })
+    .values({ subscriberId, sequenceId, productId, nextSendAt: new Date() })
     .onConflictDoNothing()
 }
 

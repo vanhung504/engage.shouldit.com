@@ -1,68 +1,114 @@
+import { fetchPriceStats } from '@/lib/utils'
+import type { ProductMeta, PlacementMeta, WidgetMeta } from '@/widget/types'
+
+export type { WidgetMeta } from '@/widget/types'
+
 const CORS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+	'Access-Control-Allow-Origin':  '*',
+	'Access-Control-Allow-Methods': 'GET, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type',
 }
 
-export type WidgetMeta = {
-  name:          string
-  currentPrice:  string
-  historicalLow: string
-  priceStatus:   string
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+type ProductPlacement  = { id: string; intent: string; layout?: string }
+type CategoryPlacement = { intent: string; layout?: string }
+type PageConfig = {
+	products:   ProductPlacement[]
+	placements: CategoryPlacement[]
 }
+type ProductConfig  = { name: string }
+type CategoryConfig = {
+	pages:    Record<string, PageConfig>
+	products: Record<string, ProductConfig>
+}
+
+const widgetConfig: Record<string, CategoryConfig> = {
+	'kitchen-faucets': {
+		pages: {
+			'reviews/best': {
+				products: [
+					{ id: '6503b706-5898-4895-b9f6-b15fa304dcc7', intent: 'buying' },
+				],
+				placements: [],
+			},
+		},
+		products: {
+			'6503b706-5898-4895-b9f6-b15fa304dcc7': { name: 'Delta Lenta Touch2O' },
+		},
+	},
+	'blenders': {
+		pages: {
+			'reviews/best': {
+				products: [
+					{ id: '219f6797-3c82-4a00-b973-8e5ad3eb9325', intent: 'buying' },
+				],
+				placements: [],
+			},
+		},
+		products: {
+			'219f6797-3c82-4a00-b973-8e5ad3eb9325': { name: 'NutriBullet Full-Size' },
+		},
+	},
+}
+
+// ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: CORS })
+	return new Response(null, { status: 204, headers: CORS })
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url)
-  const productSlug = searchParams.get('product')
-  const bestSlug    = searchParams.get('best')
+	const bestSlug = new URL(request.url).searchParams.get('best')
+	if (!bestSlug) {
+		return Response.json({ error: 'best param required' }, { status: 400, headers: CORS })
+	}
 
-  if (!productSlug && !bestSlug) {
-    return Response.json({ error: 'id or best param required' }, { status: 400, headers: CORS })
-  }
+	const [category, ...parts] = bestSlug.replace(/^\/|\/$/g, '').split('/')
+	const path = parts.join('/')
 
-  const base = process.env.SHOULDIT_API_URL ?? 'https://shouldit.com'
+	const config = widgetConfig[category]
+	const page   = config?.pages[path]
 
-  try {
-    if (productSlug) {
-      const res = await fetch(`${base}/api/product-meta?slug=${encodeURIComponent(productSlug)}`, {
-        headers: { 'x-source': 'engage' },
-        signal:  AbortSignal.timeout(5000),
-      })
-      if (!res.ok) return Response.json({ error: 'Not found' }, { status: res.status, headers: CORS })
+	if (!page) {
+		return Response.json({ error: 'No config for this slug' }, { status: 404, headers: CORS })
+	}
 
-      const p = await res.json()
-      const meta: WidgetMeta = {
-        name:          p.name,
-        currentPrice:  p.currentPrice,
-        historicalLow: p.historicalLow,
-        priceStatus:   p.priceStatus,
-      }
-      return Response.json(meta, { headers: CORS })
-    }
+	try {
+		const productIds = page.products.map(p => p.id)
+		const stats      = productIds.length ? await fetchPriceStats(productIds) : {}
 
-    // best slug — take top pick
-    const res = await fetch(`${base}/api/best-meta?slug=${encodeURIComponent(bestSlug!)}`, {
-      headers: { 'x-source': 'engage' },
-      signal:  AbortSignal.timeout(8000),
-    })
-    if (!res.ok) return Response.json({ error: 'Not found' }, { status: res.status, headers: CORS })
+		const productResults: ProductMeta[] = page.products
+			.filter(p => stats[p.id])
+			.map(p => ({
+				type:          'product',
+				productId:     p.id,
+				name:          config.products[p.id]?.name ?? p.id,
+				category,
+				intent:        p.intent,
+				layout:        p.layout ?? 'default',
+				currentPrice:  stats[p.id].currentPrice,
+				historicalLow: stats[p.id].historicalLow,
+				priceStatus:   stats[p.id].priceStatus,
+			}))
 
-    const picks: { name: string; currentPrice: string; historicalLow: string; priceStatus: string }[] = await res.json()
-    const top = Array.isArray(picks) ? picks[0] : picks
-    if (!top) return Response.json({ error: 'No picks' }, { status: 404, headers: CORS })
+		const placementResults: PlacementMeta[] = page.placements.map(pl => ({
+			type:     'placement',
+			category,
+			intent:   pl.intent,
+			layout:   pl.layout ?? 'default',
+		}))
 
-    const meta: WidgetMeta = {
-      name:          top.name,
-      currentPrice:  top.currentPrice,
-      historicalLow: top.historicalLow,
-      priceStatus:   top.priceStatus,
-    }
-    return Response.json(meta, { headers: CORS })
-  } catch {
-    return Response.json({ error: 'Upstream error' }, { status: 502, headers: CORS })
-  }
+		const results: WidgetMeta[] = [...productResults, ...placementResults]
+
+		if (!results.length) {
+			return Response.json({ error: 'No data available' }, { status: 404, headers: CORS })
+		}
+
+		return Response.json(results, { headers: CORS })
+
+	} catch (err) {
+		console.error('[widget-meta] error:', err)
+		return Response.json({ error: 'Prices API error' }, { status: 502, headers: CORS })
+	}
 }

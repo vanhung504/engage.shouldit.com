@@ -3,19 +3,18 @@ import { and, desc, eq, gt, isNull, or } from 'drizzle-orm'
 import { render } from '@react-email/render'
 import { db } from '@/db'
 import { alertSubscriptions, alertTemplates, alertSendLog, subscribers } from '@/db/schema'
-import { fetchProductMeta } from '@/lib/interpolate'
-import { resolveVariables } from '@/lib/interpolate'
-import { getAttributes } from '@/lib/attributes'
+import { fetchProductMeta, resolveVariables } from '@/lib/interpolate'
+import { checkCondition } from '@/lib/send-step'
 import { resend } from '@/lib/resend'
 import { EmailWrapper } from '@/emails/wrapper'
 
 const FROM_EMAIL   = 'shouldit <hello@shouldit.com>'
 const ENGAGE_URL   = 'https://engage.shouldit.com'
 
-// Price drop thresholds
-const NEAR_LOW_FACTOR   = 1.10  // price must be within 10% of historical low
-const MIN_DROP_DOLLARS  = 5     // must drop ≥ $5 from last alert price
-const COOLDOWN_DAYS     = 30    // min days between alerts
+const COOLDOWN_DAYS    = 2     // min days between alerts
+const MIN_DROP_PERCENT = 0.05  // must drop ≥ 5% from last alert price
+
+const GOOD_STATUSES = new Set(['all-time-low', 'good'])
 
 function isAuthorized(request: Request): boolean {
   return request.headers.get('authorization') === `Bearer ${process.env.CRON_SECRET}`
@@ -32,11 +31,11 @@ export async function POST(request: Request) {
 
   const now = new Date()
 
-  // Active subscriptions that haven't expired
   const activeSubs = await db
     .select({
-      sub:   alertSubscriptions,
-      email: subscribers.email,
+      sub:            alertSubscriptions,
+      email:          subscribers.email,
+      subscriberMeta: subscribers.meta,
     })
     .from(alertSubscriptions)
     .innerJoin(subscribers, eq(alertSubscriptions.subscriberId, subscribers.id))
@@ -49,17 +48,20 @@ export async function POST(request: Request) {
   let sent    = 0
   let skipped = 0
 
-  for (const { sub, email } of activeSubs) {
+  for (const { sub, email, subscriberMeta } of activeSubs) {
     try {
-      // Fetch current product pricing
-      const meta = await fetchProductMeta(sub.productId)
-      if (!meta) { skipped++; continue }
+      const productMeta = await fetchProductMeta(sub.productId)
+      if (!productMeta) { skipped++; continue }
 
-      const currentPrice    = parsePrice(meta.currentPrice)
-      const historicalLow   = parsePrice(meta.historicalLow)
+      const currentPrice = parsePrice(productMeta.currentPrice ?? '')
 
-      // Condition 1: price is near historical low
-      if (currentPrice > historicalLow * NEAR_LOW_FACTOR) { skipped++; continue }
+      // Condition 1: price must be lower than when subscriber signed up
+      if (sub.priceAtSubscription != null && currentPrice >= Number(sub.priceAtSubscription)) {
+        skipped++; continue
+      }
+
+      // Condition 2: price_status must be good or better
+      if (!GOOD_STATUSES.has(productMeta.price_status ?? '')) { skipped++; continue }
 
       // Get last alert sent for this subscriber + product
       const [lastLog] = await db
@@ -72,24 +74,20 @@ export async function POST(request: Request) {
         .orderBy(desc(alertSendLog.sentAt))
         .limit(1)
 
-      // Condition 2: cooldown 30 days since last alert
+      // Condition 3: cooldown since last alert
       if (lastLog) {
         const daysSince = (now.getTime() - lastLog.sentAt.getTime()) / 86400000
         if (daysSince < COOLDOWN_DAYS) { skipped++; continue }
       }
 
-      // Condition 3: price dropped ≥ $5 from last alert price
+      // Condition 4: price dropped ≥ 5% from last alert price
       if (lastLog) {
-        const drop = Number(lastLog.priceAtSend) - currentPrice
-        if (drop < MIN_DROP_DOLLARS) { skipped++; continue }
+        const dropPct = (Number(lastLog.priceAtSend) - currentPrice) / Number(lastLog.priceAtSend)
+        if (dropPct < MIN_DROP_PERCENT) { skipped++; continue }
       }
 
-      // Resolve attributes first — needed for intent matching and conditionKey
-      const tags = await getAttributes(sub.subscriberId)
+      const subscriberIntent = sub.intent ?? null
 
-      const subscriberIntent = tags.find(t => t.key === 'intent')?.value ?? null
-
-      // Get alert template: prefer specific intent match, fall back to null-intent (any)
       const templates = await db
         .select()
         .from(alertTemplates)
@@ -109,25 +107,17 @@ export async function POST(request: Request) {
 
       if (!template) { skipped++; continue }
 
-      // Check subscriber-level condition
       if (template.conditionKey) {
-        const key = template.conditionKey
-        const pass =
-          key === 'not_pro'            ? !tags.some(t => t.key === 'member_tier' && t.value === 'pro') :
-          key === 'has_clicked_amazon' ?  tags.some(t => t.key === 'clicked'     && t.value === 'amazon') :
-          key === 'has_use_case_tag'   ?  tags.some(t => t.key === 'use_case') :
-          key === 'price_status_good'  ?  tags.some(t => t.key === 'price_status' && t.value === 'good') :
-          key === 'price_status_fair'  ?  tags.some(t => t.key === 'price_status' && t.value === 'fair') :
-          key === 'price_status_high'  ?  tags.some(t => t.key === 'price_status' && t.value === 'high') :
-          true
+        const pass = checkCondition(template.conditionKey, {
+          memberTier:  subscriberMeta?.member_tier,
+          priceStatus: productMeta.price_status,
+        })
         if (!pass) { skipped++; continue }
       }
-      const unsubscribeUrl = `${ENGAGE_URL}/unsubscribe?sid=${sub.subscriberId}`
 
-      const [resolvedBody, resolvedSubject] = await Promise.all([
-        resolveVariables(template.bodyHtml, tags),
-        resolveVariables(template.subject, tags),
-      ])
+      const unsubscribeUrl = `${ENGAGE_URL}/unsubscribe?sid=${sub.subscriberId}`
+      const resolvedBody    = resolveVariables(template.bodyHtml, { sid: sub.subscriberId }, productMeta)
+      const resolvedSubject = resolveVariables(template.subject,  { sid: sub.subscriberId }, productMeta)
 
       const html = await render(
         React.createElement(EmailWrapper, {
@@ -144,7 +134,6 @@ export async function POST(request: Request) {
         html,
       })
 
-      // Log the send
       await db.insert(alertSendLog).values({
         subscriberId:  sub.subscriberId,
         templateId:    template.id,

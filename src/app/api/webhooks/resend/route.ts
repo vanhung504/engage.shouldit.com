@@ -8,8 +8,9 @@ import { checkGraduation } from '@/lib/graduation'
 type WebhookEvent = {
   type: string
   data: {
-    to?:   string[]
-    email?: string
+    to?:      string[]
+    email?:   string
+    email_id?: string
     [key: string]: unknown
   }
 }
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
 
   let event: WebhookEvent
   try {
-    event = verifyWebhook(payload, request.headers) as WebhookEvent
+    event = verifyWebhook(payload, request.headers) as unknown as WebhookEvent
   } catch {
     return Response.json({ error: 'Invalid signature' }, { status: 401 })
   }
@@ -41,12 +42,12 @@ export async function POST(request: Request) {
 
   switch (event.type) {
     case 'email.opened':
-      await db.insert(events).values({ subscriberId: subscriber.id, type: 'EMAIL_OPENED' })
+      await db.insert(events).values({ subscriberId: subscriber.id, type: 'EMAIL_OPENED', resendEmailId: event.data.email_id ?? null })
       await checkGraduation(subscriber.id)
       break
 
     case 'email.clicked':
-      await db.insert(events).values({ subscriberId: subscriber.id, type: 'EMAIL_CLICKED' })
+      await db.insert(events).values({ subscriberId: subscriber.id, type: 'EMAIL_CLICKED', resendEmailId: event.data.email_id ?? null })
       break
 
     case 'email.bounced':

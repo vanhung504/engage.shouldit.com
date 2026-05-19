@@ -4,6 +4,7 @@ const KEYS = {
   subscriberId: 'si_sid',
   gates:        'si_gates',
   exitShown:    'si_exit_shown',
+  tracked:      'si_tracked',
 } as const
 
 export function isSubscribed(): boolean {
@@ -41,6 +42,25 @@ export function unlockGate(gateId: string): void {
 
 export function isGateUnlocked(gateId: string): boolean {
   return getUnlockedGates().includes(gateId)
+}
+
+export function getTracked(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(KEYS.tracked) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+export function isTracked(key: string): boolean {
+  return getTracked().includes(key)
+}
+
+export function addTracked(key: string): void {
+  const list = getTracked()
+  if (!list.includes(key)) {
+    localStorage.setItem(KEYS.tracked, JSON.stringify([...list, key]))
+  }
 }
 
 export function wasExitShown(): boolean {

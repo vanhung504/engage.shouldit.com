@@ -6,9 +6,11 @@ import { createId } from '@paralleldrive/cuid2'
 const ALERT_EXPIRES_DAYS = 90
 
 export async function createAlertSubscription(
-  subscriberId: string,
-  productId:    string,
-  categorySlug: string,
+  subscriberId:        string,
+  productId:           string,
+  categorySlug:        string,
+  intent?:             string | null,
+  priceAtSubscription?: number | null,
 ): Promise<void> {
   const [cat] = await db
     .select({ id: categories.id })
@@ -23,6 +25,14 @@ export async function createAlertSubscription(
 
   await db
     .insert(alertSubscriptions)
-    .values({ id: createId(), subscriberId, categoryId: cat.id, productId, expiresAt })
+    .values({
+      id: createId(),
+      subscriberId,
+      categoryId:          cat.id,
+      productId,
+      intent:              intent ?? null,
+      priceAtSubscription: priceAtSubscription != null ? String(priceAtSubscription) : null,
+      expiresAt,
+    })
     .onConflictDoNothing()
 }

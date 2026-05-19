@@ -150,7 +150,7 @@ function StepCard({ step, onSave, onDelete, onUpdate, onFieldFocus }: {
               <HtmlEditor
                 value={step.bodyHtml}
                 onChange={val => onUpdate(step.id, { bodyHtml: val })}
-                onFocus={e => onFieldFocus?.(e.target, val => onUpdate(step.id, { bodyHtml: val }))}
+                onFocus={e => onFieldFocus?.(e.target as HTMLTextAreaElement, val => onUpdate(step.id, { bodyHtml: val }))}
               />
             </div>
 

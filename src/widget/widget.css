@@ -1,2 +1,31 @@
-@import "tailwindcss/theme";
 @import "tailwindcss/utilities";
+
+@source "./components/**/*.ts";
+@source "./index.ts";
+
+@theme inline {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --spacing: 0.25rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: calc(1.25 / 0.875);
+  --text-base: 1rem;
+  --text-base--line-height: 1.5;
+  --color-white: #fff;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-700: #374151;
+  --color-gray-900: #111827;
+  --color-emerald-600: #059669;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+  --container-xl: 36rem;
+}
+
+.si-input,
+.si-input-light { outline: none; }
+.si-input:focus       { outline: 2px solid #1e2d5a; outline-offset: -1px; }
+.si-input-light:focus { outline: 2px solid #111827; outline-offset: -1px; }
+.si-btn:hover         { filter: brightness(1.12); }

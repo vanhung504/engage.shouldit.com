@@ -1,12 +1,12 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { subscribers, events } from '@/db/schema'
-import { addAttribute } from '@/lib/attributes'
 import { determineSequence } from '@/lib/routing'
 import { enrollIfNotEnrolled } from '@/lib/enrollment'
 import { createAlertSubscription } from '@/lib/alerts'
 import { fetchMemberStatus } from '@/lib/member-status'
 import { syncContact } from '@/lib/resend'
+import { sendStep0 } from '@/lib/send-step'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,8 +25,7 @@ export async function OPTIONS() {
 export async function POST(request: Request) {
   let body: {
     email?:      unknown
-    attributes?: Record<string, unknown>
-    metadata?:   Record<string, unknown>
+    attributes?: Record<string, unknown> // { product_id, category, intent } from widget
   }
 
   try {
@@ -38,9 +37,8 @@ export async function POST(request: Request) {
     )
   }
 
-  const { email, attributes: rawAttrs = {} } = body
+  const { email, attributes = {} } = body
 
-  // 1. Validate email
   if (!isValidEmail(email)) {
     return Response.json(
       { success: false, error: 'Invalid email' },
@@ -48,7 +46,12 @@ export async function POST(request: Request) {
     )
   }
 
-  // 2. Check existing subscriber — merge attributes and return early
+  const attrs: Record<string, string> = {}
+  for (const [key, value] of Object.entries(attributes)) {
+    if (value != null) attrs[key] = String(value)
+  }
+
+  // Existing subscriber — re-enroll with new attrs and send day-0 immediately
   const [existing] = await db
     .select()
     .from(subscribers)
@@ -56,36 +59,26 @@ export async function POST(request: Request) {
     .limit(1)
 
   if (existing) {
-    for (const [key, value] of Object.entries(rawAttrs)) {
-      if (value != null) await addAttribute(existing.id, key, String(value))
-    }
+    const sequenceId = determineSequence(attrs)
+    await enrollIfNotEnrolled(existing.id, sequenceId, attrs.product_id)
+    sendStep0(existing.id).catch(err => console.error('[subscribe] sendStep0 failed:', err))
     return Response.json({ success: true, isNew: false }, { headers: corsHeaders })
   }
 
-  // 3. Member status check — non-blocking (fetchMemberStatus catches all errors)
+  // Member status check — non-blocking
   const memberStatus = await fetchMemberStatus(email as string)
+  const meta = memberStatus?.tier === 'pro' ? { member_tier: 'pro' as const } : {}
 
-  const attrs: Record<string, string> = {}
-  for (const [key, value] of Object.entries(rawAttrs)) {
-    if (value != null) attrs[key] = String(value)
-  }
-  if (memberStatus?.tier === 'pro') attrs.member_tier = 'pro'
-
-  // 4. Insert subscriber
+  // Insert subscriber
   const [subscriber] = await db
     .insert(subscribers)
-    .values({ email: email as string })
+    .values({ email: email as string, meta })
     .returning()
 
-  // 5. Insert subscriber attributes
-  for (const [key, value] of Object.entries(attrs)) {
-    await addAttribute(subscriber.id, key, value)
-  }
-
-  // 6. Insert SUBSCRIBED event
+  // Insert SUBSCRIBED event
   await db.insert(events).values({ subscriberId: subscriber.id, type: 'SUBSCRIBED' })
 
-  // 7. Sync to Resend contacts
+  // Sync to Resend contacts
   const contactId = await syncContact(email as string)
   if (contactId) {
     await db
@@ -94,15 +87,18 @@ export async function POST(request: Request) {
       .where(eq(subscribers.id, subscriber.id))
   }
 
-  // 8. Enroll in sequence
+  // Enroll in sequence and send day-0 email immediately
   const sequenceId = determineSequence(attrs)
-  await enrollIfNotEnrolled(subscriber.id, sequenceId)
+  await enrollIfNotEnrolled(subscriber.id, sequenceId, attrs.product_id)
+  sendStep0(subscriber.id).catch(err => console.error('[subscribe] sendStep0 failed:', err))
 
-  // 9. Price alert subscription for deal + buying intent
+  // Price alert subscription for deal + buying intent
   if ((attrs.intent === 'deal' || attrs.intent === 'buying') && attrs.product_id && attrs.category) {
-    await createAlertSubscription(subscriber.id, attrs.product_id, attrs.category)
+    const priceAtSubscription = attrs.current_price
+      ? parseFloat(attrs.current_price.replace(/[^0-9.]/g, ''))
+      : null
+    await createAlertSubscription(subscriber.id, attrs.product_id, attrs.category, attrs.intent, priceAtSubscription)
   }
 
-  // 10. Return
   return Response.json({ success: true, isNew: true }, { headers: corsHeaders })
 }

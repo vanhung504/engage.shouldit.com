@@ -8,7 +8,7 @@ function slugify(name: string) {
 }
 
 
-export function NewCategoryModal() {
+export function NewCategoryModal({ redirectTo = '/admin' }: { redirectTo?: string }) {
   const router                    = useRouter()
   const [name, setName]           = useState('')
   const [loading, setLoading]     = useState(false)
@@ -34,7 +34,7 @@ export function NewCategoryModal() {
       return
     }
 
-    router.push(`/admin?category=${slug}`)
+    router.push(`${redirectTo}?category=${slug}`)
   }
 
   return (
@@ -70,7 +70,7 @@ export function NewCategoryModal() {
             </button>
             <button
               type="button"
-              onClick={() => router.push('/admin')}
+              onClick={() => router.push(redirectTo)}
               className="px-4 py-2 bg-transparent border border-gray-300 rounded-md cursor-pointer text-sm hover:border-gray-500 transition-colors"
             >
               Cancel

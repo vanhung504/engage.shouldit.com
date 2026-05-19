@@ -1,13 +1,15 @@
-// Capture before any async callbacks — currentScript is only available during sync evaluation
-const _scriptSrc = (document.currentScript as HTMLScriptElement | null)?.src ?? ''
+const CSS = `
+  .si-btn:hover { filter: brightness(1.12); }
+  .si-input { outline: none; }
+  .si-input:focus { outline: 2px solid #1e2d5a; outline-offset: -1px; }
+  .si-input-light { outline: none; }
+  .si-input-light:focus { outline: 2px solid #111827; outline-offset: -1px; }
+`
 
 export function injectStyles(): void {
   if (document.getElementById('si-styles')) return
-  const href = _scriptSrc.replace(/widget\.js(\?.*)?$/, 'widget.css')
-  if (!href) return
-  const link = document.createElement('link')
-  link.id = 'si-styles'
-  link.rel = 'stylesheet'
-  link.href = href
-  document.head.appendChild(link)
+  const style = document.createElement('style')
+  style.id = 'si-styles'
+  style.textContent = CSS
+  document.head.appendChild(style)
 }
