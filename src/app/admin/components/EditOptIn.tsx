@@ -36,7 +36,7 @@ function applyVars(text: string, vars: Record<string, string>) {
   return text.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] || `{{${k}}}`)
 }
 
-export function EditOptIn({ placementId, categorySlug }: { placementId: string; categorySlug: string }) {
+export function EditOptIn({ placementId, categorySlug, categoryId }: { placementId: string; categorySlug: string; categoryId: string }) {
   const router                        = useRouter()
   const [optIn, setOptIn]             = useState<OptIn | null>(null)
   const [sequenceId, setSeqId]        = useState<string>('')
@@ -332,7 +332,7 @@ export function EditOptIn({ placementId, categorySlug }: { placementId: string; 
               <p className="font-semibold text-xs text-gray-500 tracking-wide uppercase mb-3">
                 Email sequence
               </p>
-              <EditSequence sequenceId={sequenceId} onFieldFocus={handleFieldFocus} />
+              <EditSequence sequenceId={sequenceId} categoryId={categoryId} onFieldFocus={handleFieldFocus} />
             </div>
           )}
         </div>

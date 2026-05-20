@@ -127,11 +127,17 @@ export async function POST(request: Request) {
         })
       )
 
+      const threadHeaders = lastLog?.resendEmailId ? {
+        'In-Reply-To': lastLog.resendEmailId,
+        'References':  lastLog.resendEmailId,
+      } : undefined
+
       const { data } = await resend.emails.send({
         from:    FROM_EMAIL,
         to:      [email],
         subject: resolvedSubject,
         html,
+        ...(threadHeaders ? { headers: threadHeaders } : {}),
       })
 
       await db.insert(alertSendLog).values({

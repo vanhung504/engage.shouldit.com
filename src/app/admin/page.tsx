@@ -55,7 +55,7 @@ export default async function AdminPage({
       {!activeCat ? (
         <p className="text-gray-500">No categories yet. Create one above.</p>
       ) : view === 'edit-optin' && sp.placement ? (
-        <EditOptIn placementId={sp.placement} categorySlug={activeCat.slug} />
+        <EditOptIn placementId={sp.placement} categorySlug={activeCat.slug} categoryId={activeCat.id} />
       ) : (
         <>
           <PlacementsList categoryId={activeCat.id} categorySlug={activeCat.slug} />

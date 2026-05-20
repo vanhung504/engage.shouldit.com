@@ -1,3 +1,5 @@
+import { applyVars } from '@/lib/utils'
+
 type ProductMeta = Record<string, string>
 
 export type { ProductMeta }
@@ -35,5 +37,5 @@ export function resolveVariables(
 		...(ctx.meta ?? {}),
 		...(prefetchedMeta ?? {}),
 	}
-	return template.replace(/\{\{(\w+)\}\}/g, (match, key) => vars[key] ?? match)
+	return applyVars(template, vars)
 }

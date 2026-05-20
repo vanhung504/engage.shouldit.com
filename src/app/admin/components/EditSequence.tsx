@@ -36,8 +36,9 @@ const CONDITIONS = [
 
 const inputClass = 'w-full px-2.5 py-2 bg-white text-gray-900 placeholder:text-gray-400 border border-gray-300 rounded-md text-sm mt-1 outline-none focus:ring-2 focus:ring-black focus:border-transparent'
 
-function StepCard({ step, onSave, onDelete, onUpdate, onFieldFocus }: {
+function StepCard({ step, categoryId, onSave, onDelete, onUpdate, onFieldFocus }: {
   step:          Step
+  categoryId?:   string
   onSave:        (id: string, patch: Partial<Step>) => Promise<void>
   onDelete:      (id: string) => Promise<void>
   onUpdate:      (id: string, patch: Partial<Step>) => void
@@ -151,6 +152,8 @@ function StepCard({ step, onSave, onDelete, onUpdate, onFieldFocus }: {
                 value={step.bodyHtml}
                 onChange={val => onUpdate(step.id, { bodyHtml: val })}
                 onFocus={e => onFieldFocus?.(e.target as HTMLTextAreaElement, val => onUpdate(step.id, { bodyHtml: val }))}
+                categoryId={categoryId}
+                conditionKey={step.conditionKey}
               />
             </div>
 
@@ -185,8 +188,9 @@ function StepCard({ step, onSave, onDelete, onUpdate, onFieldFocus }: {
   )
 }
 
-export function EditSequence({ sequenceId, onFieldFocus }: {
+export function EditSequence({ sequenceId, categoryId, onFieldFocus }: {
   sequenceId:    string
+  categoryId?:   string
   onFieldFocus?: OnFieldFocus
 }) {
   const sensors           = useSensors(useSensor(PointerSensor))
@@ -274,6 +278,7 @@ export function EditSequence({ sequenceId, onFieldFocus }: {
                 <StepCard
                   key={step.id}
                   step={step}
+                  categoryId={categoryId}
                   onSave={saveStep}
                   onDelete={deleteStep}
                   onUpdate={updateLocal}

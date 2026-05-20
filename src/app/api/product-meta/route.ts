@@ -1,7 +1,8 @@
 import { eq } from 'drizzle-orm'
 import { db } from '@/db'
 import { products } from '@/db/schema'
-import { fetchPriceStats } from '@/lib/utils'
+import { fetchPriceStats, parsePrice, getPricePositionText, priceGaugeHtml } from '@/lib/utils'
+import type { PriceStatus } from '@/lib/utils'
 
 const CORS = {
 	'Access-Control-Allow-Origin':  '*',
@@ -13,8 +14,12 @@ export async function OPTIONS() {
 	return new Response(null, { status: 204, headers: CORS })
 }
 
+const VALID_STATUSES = new Set<PriceStatus>(['all-time-low', 'good', 'fair', 'high'])
+
 export async function GET(request: Request) {
-	const productId = new URL(request.url).searchParams.get('productId')
+	const { searchParams } = new URL(request.url)
+	const productId    = searchParams.get('productId')
+	const forceStatus  = searchParams.get('force_status') as PriceStatus | null
 	if (!productId) {
 		return Response.json({ error: 'productId required' }, { status: 400, headers: CORS })
 	}
@@ -29,12 +34,12 @@ export async function GET(request: Request) {
 		return Response.json({ error: 'Not found' }, { status: 404, headers: CORS })
 	}
 
-	const priceStats = await fetchPriceStats([product.productId], true).catch(() => null)
-	const stats = priceStats?.[product.productId]
+	// force_status=good|fair|high|all-time-low: admin preview only — fakes current price inside
+	// fetchPriceStats so all derived values (priceDiffFromLow, targetPriceRange, etc.) are consistent.
+	const validatedStatus = forceStatus && VALID_STATUSES.has(forceStatus) ? forceStatus : undefined
+	const priceStats = await fetchPriceStats([product.productId], true, validatedStatus).catch(() => null)
+	const stats = priceStats?.[product.productId] ?? null
 
-	// Flatten meta: string values pass through,
-	// object values (e.g. value_statement per price_status) serialised as JSON —
-	// send-step resolves the right variant at send time based on price_status.
 	const flat: Record<string, string> = { product_name: product.name }
 	for (const { key, value } of product.meta) {
 		if (typeof value === 'string') {
@@ -44,14 +49,22 @@ export async function GET(request: Request) {
 			if (resolved !== undefined) flat[key] = resolved
 		}
 	}
-	console.log(stats)
+
 	if (stats) {
-		flat.current_price     	= stats.currentPrice
-		flat.low_price  		= stats.historicalLow
-		flat.high_price 		= stats.historicalHigh
-		flat.price_status      	= stats.priceStatus
+		flat.current_price = stats.currentPrice
+		flat.low_price     = stats.historicalLow
+		flat.high_price    = stats.historicalHigh
+		flat.price_status  = stats.priceStatus
+
+		if (stats.affiliateUrl)     flat.affiliate_url       = stats.affiliateUrl
 		if (stats.priceDiffFromLow) flat.price_diff_from_low = stats.priceDiffFromLow
 		if (stats.targetPriceRange) flat.target_price_range  = stats.targetPriceRange
+
+		const cur = parsePrice(stats.currentPrice), lo = parsePrice(stats.historicalLow), hi = parsePrice(stats.historicalHigh)
+		if (hi > lo) {
+			flat.price_gauge_html = priceGaugeHtml(stats.currentPrice, stats.historicalLow, stats.historicalHigh)
+		}
+		if (stats.priceStatus === 'fair') flat.price_position_text = getPricePositionText(cur, lo, hi)
 	}
 
 	return Response.json(flat, { headers: CORS })

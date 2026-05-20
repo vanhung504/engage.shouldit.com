@@ -1,5 +1,5 @@
 import React from 'react'
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { render } from '@react-email/render'
 import { db } from '@/db'
 import { sequenceEnrollments, sequenceSteps, sequenceSendLog, subscribers } from '@/db/schema'
@@ -43,11 +43,20 @@ type SubscriberCtx = {
 	meta:  { member_tier?: string } | null
 }
 
+function groupByDay<T extends { dayOffset: number }>(steps: T[]): { dayOffset: number; steps: T[] }[] {
+	const map = new Map<number, T[]>()
+	for (const step of steps) {
+		if (!map.has(step.dayOffset)) map.set(step.dayOffset, [])
+		map.get(step.dayOffset)!.push(step)
+	}
+	return [...map.entries()].map(([dayOffset, steps]) => ({ dayOffset, steps }))
+}
+
 export async function sendEnrollmentStep(
 	enrollment: SequenceEnrollment,
 	subscriber: SubscriberCtx,
 ): Promise<StepResult> {
-	const steps = await db
+	const allSteps = await db
 		.select()
 		.from(sequenceSteps)
 		.where(and(
@@ -56,12 +65,21 @@ export async function sendEnrollmentStep(
 		))
 		.orderBy(asc(sequenceSteps.position))
 
-	if (!steps.length) return 'no_steps'
+	if (!allSteps.length) {
+		console.log('[sendEnrollmentStep] no active steps in sequence')
+		return 'no_steps'
+	}
 
-	const step = steps[enrollment.step]
+	// enrollment.step is a day-group index, not a flat step index.
+	// Each day can have multiple steps (e.g. one per price_status); only the matching one is sent.
+	const groups = groupByDay(allSteps)
+	const currentGroup = groups[enrollment.step]
 
-	if (!step) {
-		await advanceStep(enrollment, steps)
+	console.log('[sendEnrollmentStep]', { enrollmentId: enrollment.id, step: enrollment.step, totalDays: groups.length })
+
+	if (!currentGroup) {
+		console.log('[sendEnrollmentStep] no more day groups — completed')
+		await advanceStep(enrollment, groups)
 		await enrollIfNotEnrolled(enrollment.subscriberId, 'crosssell_survey')
 		return 'completed'
 	}
@@ -70,13 +88,20 @@ export async function sendEnrollmentStep(
 		? await fetchProductMeta(enrollment.productId)
 		: null
 
+	console.log('[sendEnrollmentStep] productMeta', productMeta ? { price_status: productMeta.price_status } : null)
+
 	const conditionCtx: ConditionCtx = {
 		memberTier:  subscriber.meta?.member_tier,
 		priceStatus: productMeta?.price_status,
 	}
 
-	if (!checkCondition(step.conditionKey, conditionCtx)) {
-		await advanceStep(enrollment, steps)
+	// Pick the first step in this day group whose condition matches
+	const step = currentGroup.steps.find(s => checkCondition(s.conditionKey, conditionCtx)) ?? null
+
+	console.log('[sendEnrollmentStep] day', { dayOffset: currentGroup.dayOffset, candidates: currentGroup.steps.length, matched: step?.id ?? null, conditionCtx })
+
+	if (!step) {
+		await advanceStep(enrollment, groups)
 		return 'skipped'
 	}
 
@@ -84,18 +109,34 @@ export async function sendEnrollmentStep(
 	const category = enrollment.sequenceId.split('_')[0]
 	const ctx = { sid: subscriber.id, category, meta: enrollment.meta }
 
-	const resolvedBody    = resolveVariables(step.bodyHtml, ctx, productMeta)
-	const resolvedSubject = resolveVariables(step.subject,  ctx, productMeta)
+	const resolvedSubject     = resolveVariables(step.subject,     ctx, productMeta)
+	const resolvedPreviewText = resolveVariables(step.previewText, ctx, productMeta)
+	const resolvedBody        = resolveVariables(step.bodyHtml,    ctx, productMeta)
 
 	const html = await render(
 		React.createElement(EmailWrapper, {
-			previewText: step.previewText,
+			previewText: resolvedPreviewText,
 			bodyHtml:    resolvedBody,
 			unsubscribeUrl,
 		})
 	)
 
-	const { data } = await resend.emails.send({ from: FROM_EMAIL, to: [subscriber.email], subject: resolvedSubject, html })
+	const [prevLog] = await db
+		.select({ resendEmailId: sequenceSendLog.resendEmailId })
+		.from(sequenceSendLog)
+		.where(eq(sequenceSendLog.enrollmentId, enrollment.id))
+		.orderBy(desc(sequenceSendLog.sentAt))
+		.limit(1)
+
+	const threadHeaders = prevLog?.resendEmailId ? {
+		'In-Reply-To': prevLog.resendEmailId,
+		'References':  prevLog.resendEmailId,
+	} : undefined
+
+	const { data } = await resend.emails.send({
+		from: FROM_EMAIL, to: [subscriber.email], subject: resolvedSubject, html,
+		...(threadHeaders ? { headers: threadHeaders } : {}),
+	})
 
 	await db.insert(sequenceSendLog).values({
 		enrollmentId:  enrollment.id,
@@ -104,8 +145,8 @@ export async function sendEnrollmentStep(
 	})
 
 	const nextIndex = enrollment.step + 1
-	await advanceStep(enrollment, steps)
-	if (nextIndex >= steps.length) {
+	await advanceStep(enrollment, groups)
+	if (nextIndex >= groups.length) {
 		await enrollIfNotEnrolled(enrollment.subscriberId, 'crosssell_survey')
 	}
 
@@ -113,6 +154,7 @@ export async function sendEnrollmentStep(
 }
 
 export async function sendStep0(subscriberId: string): Promise<void> {
+	console.log('[sendStep0] start', { subscriberId })
 	const [row] = await db
 		.select({
 			enrollment: sequenceEnrollments,
@@ -128,7 +170,12 @@ export async function sendStep0(subscriberId: string): Promise<void> {
 		))
 		.limit(1)
 
-	if (!row) return
+	if (!row) {
+		console.log('[sendStep0] no active enrollment at step 0 — skipping')
+		return
+	}
 
-	await sendEnrollmentStep(row.enrollment, { id: subscriberId, email: row.email, meta: row.meta })
+	console.log('[sendStep0] enrollment found', { enrollmentId: row.enrollment.id, sequenceId: row.enrollment.sequenceId, email: row.email })
+	const result = await sendEnrollmentStep(row.enrollment, { id: subscriberId, email: row.email, meta: row.meta })
+	console.log('[sendStep0] result', result)
 }

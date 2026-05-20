@@ -47,6 +47,7 @@ export async function POST(request: Request) {
       break
 
     case 'email.clicked':
+      console.log('[webhook] email.clicked payload:', JSON.stringify(event.data, null, 2))
       await db.insert(events).values({ subscriberId: subscriber.id, type: 'EMAIL_CLICKED', resendEmailId: event.data.email_id ?? null })
       break
 

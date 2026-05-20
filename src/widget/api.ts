@@ -15,10 +15,10 @@ type SubscribeResult =
   | { success: false; error: string }
 
 export async function subscribe(
-  email:        string,
-  productId:    string,
-  category:     string,
-  intent:       string,
+  email:         string,
+  productId?:    string,
+  category?:     string,
+  intent?:       string,
   currentPrice?: string,
 ): Promise<SubscribeResult> {
   const res = await fetch(`${getApiUrl()}/subscribe`, {

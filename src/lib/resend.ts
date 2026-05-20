@@ -22,7 +22,11 @@ export function verifyWebhook(
 ): ReturnType<typeof resend.webhooks.verify> {
   return resend.webhooks.verify({
     payload,
-    headers,
+    headers: {
+      id:        headers.get('svix-id') ?? '',
+      timestamp: headers.get('svix-timestamp') ?? '',
+      signature: headers.get('svix-signature') ?? '',
+    },
     webhookSecret: process.env.RESEND_WEBHOOK_SECRET!,
   })
 }
