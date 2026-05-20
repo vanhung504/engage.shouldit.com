@@ -61,10 +61,6 @@ export async function POST(request: Request) {
       await cancelEnrollments(subscriber.id)
       break
 
-    case 'contact.unsubscribed':
-      await db.update(subscribers).set({ status: 'UNSUBSCRIBED' }).where(eq(subscribers.id, subscriber.id))
-      await cancelEnrollments(subscriber.id)
-      break
   }
 
   return Response.json({ ok: true })
